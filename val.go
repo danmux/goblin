@@ -3,6 +3,8 @@ package goblin
 import (
 	"fmt"
 	"io"
+	"math"
+	"math/bits"
 	"strings"
 )
 
@@ -10,7 +12,7 @@ const (
 	// the primitives
 	tBool      typeID = 1  //
 	tInt       typeID = 2  //
-	tUint      typeID = 3  // TODO
+	tUint      typeID = 3  //
 	tFloat     typeID = 4  // TODO
 	tBytes     typeID = 5  // TODO
 	tString    typeID = 6  //
@@ -56,6 +58,7 @@ type field struct {
 
 func (f field) dumpi(w io.Writer, indent int) {
 	fmt.Fprintf(w, "%s%q:\n", pad(indent), f.name)
+	// all struct fields can be skipped and contain no data
 	if !f.nonZero {
 		fmt.Fprintf(w, "%s(nil)\n", pad(indent+2))
 		return
@@ -73,25 +76,29 @@ func (f *field) copy(of field) {
 // val represents values of any of the builtin type
 type val struct {
 	t  typeID         // what primitive type id
-	da []byte         // for primitive type
+	da []byte         // for strings and []byte
+	nu uint64         // for all int, uint, float
 	sl slice          // for slice type
 	ma map[string]val // for map type. N.B. only primitive types supported in the index for now, they will be converted to string
 	st []field        // for struct type
 }
 
-// ToInt returns the integer value of the val data
-func (v val) ToInt() int64 {
-	var ans int64
-	for i := 0; i < 8; i++ {
-		t := int64(v.da[i])
-		ans += t << uint(8*(7-i))
-	}
-	return ans
-}
-
 // ToUint returns the unsigned integer value of the val data
 func (v val) ToUint() uint64 {
-	return uint64(v.ToInt())
+	return v.nu
+}
+
+// ToInt returns the integer value of the val data
+func (v val) ToInt() int64 {
+	if v.nu&1 != 0 {
+		return ^int64(v.nu >> 1)
+	}
+	return int64(v.nu >> 1)
+}
+
+func (v val) ToFloat() float64 {
+	fv := bits.ReverseBytes64(v.nu)
+	return math.Float64frombits(fv)
 }
 
 // ToBool returns the bool value of the val data
@@ -122,15 +129,6 @@ func (v *val) copy(t val) {
 	}
 }
 
-func (v *val) intToByte(i int64) {
-	// TODO consider minimum packaging
-	v.da = make([]byte, 8)
-	for n := 0; n < 8; n++ {
-		v.da[7-n] = byte(i) // big endian
-		i = i >> 8
-	}
-}
-
 func (v val) dump(w io.Writer) {
 	v.dumpi(w, 0)
 }
@@ -139,27 +137,17 @@ func pad(i int) string {
 	return strings.Repeat(" ", i)
 }
 
-func (v val) IsNil() bool {
-	switch v.t {
-	case tSlice, tStruct, tMap, tBool: // bool false is encoded as missing field
-		return false
-	}
-	return len(v.da) == 0
-}
-
 func (v val) dumpi(w io.Writer, indent int) {
-	if v.IsNil() {
-		fmt.Fprintf(w, "%s(nil)\n", pad(indent))
-		return
-	}
-
 	switch v.t {
 	case tBool:
 		fmt.Fprintf(w, "%s%t \t(%s)\n", pad(indent), v.ToBool(), v.t)
-	case tInt, tUint:
+	case tInt:
 		fmt.Fprintf(w, "%s%d \t(%s)\n", pad(indent), v.ToInt(), v.t.String())
+	case tUint:
+		fmt.Fprintf(w, "%s%d \t(%s)\n", pad(indent), v.ToUint(), v.t.String())
 	case tString:
 		fmt.Fprintf(w, "%s%q \t(%s)\n", pad(indent), string(v.da), v.t.String())
+
 	case tSlice:
 		v.sl.dumpi(w, indent)
 	case tStruct:
@@ -168,6 +156,23 @@ func (v val) dumpi(w io.Writer, indent int) {
 			f.dumpi(w, indent+2)
 		}
 		fmt.Fprintf(w, "%s}\n", pad(indent))
+	case tMap:
+		// TODO
+	default:
+		var iv interface{}
+		switch v.t {
+		case tBool:
+			iv = v.ToBool()
+		case tInt:
+			iv = v.ToInt()
+		case tUint:
+			iv = v.ToUint()
+		case tString:
+			iv = string(v.da)
+		case tFloat:
+			iv = v.ToFloat()
+		}
+		fmt.Fprintf(w, "%s%v \t(%s)\n", pad(indent), iv, v.t)
 	}
 }
 

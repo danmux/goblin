@@ -19,6 +19,7 @@ func TestGoblin(t *testing.T) {
 		Sane    bool
 		Lengths []int
 		Other   *other
+		Height  float64
 	}
 
 	thing := bart{
@@ -29,6 +30,7 @@ func TestGoblin(t *testing.T) {
 		Other: &other{
 			Colour: uint(12345678),
 		},
+		Height: 14.679,
 	}
 
 	buf := &bytes.Buffer{}

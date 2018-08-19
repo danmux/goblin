@@ -185,19 +185,12 @@ func (d *decoder) decode(x *val) error {
 			x.da = []byte{0}
 		}
 		return nil
-	case tInt:
-		iv, err := d.decodeInt()
-		if err != nil {
-			return err
-		}
-		x.intToByte(iv)
-		return nil
-	case tUint:
+	case tInt, tUint, tFloat:
 		iv, err := d.decodeUint()
 		if err != nil {
 			return err
 		}
-		x.intToByte(int64(iv))
+		x.nu = iv
 		return nil
 	case tString:
 		return d.decodeString(x)
