@@ -3,6 +3,8 @@ package goblin
 import (
 	"bytes"
 	"encoding/gob"
+	"os"
+	"strconv"
 	"testing"
 
 	"github.com/davecgh/go-spew/spew"
@@ -20,6 +22,7 @@ func TestGoblin(t *testing.T) {
 		Lengths []int
 		Other   *other
 		Height  float64
+		Blob    []byte
 	}
 
 	thing := bart{
@@ -45,6 +48,7 @@ func TestGoblin(t *testing.T) {
 		Age:     49,
 		Sane:    true,
 		Lengths: []int{0, -11155},
+		Blob:    []byte{9, 8, 7, 0x55},
 	}
 	err = enc.Encode(thing2)
 	if err != nil {
@@ -76,6 +80,148 @@ func TestGoblin(t *testing.T) {
 	}
 	if d.Err() != nil {
 		t.Error("should not have got an error, but got:", d.Err())
+	}
+}
+
+func TestGoblinMap(t *testing.T) {
+	type mini struct {
+		Name string
+		Size float32
+	}
+	type bart struct {
+		Thing       map[string]string
+		IntThing    map[int]float64
+		StructThing map[float32]mini
+	}
+
+	thing := bart{
+		Thing: map[string]string{
+			"hi": "ruth",
+		},
+		IntThing: map[int]float64{
+			1: 2.3,
+			4: .00005,
+		},
+		StructThing: map[float32]mini{
+			12.5: mini{
+				Name: "jon",
+				Size: 4.5,
+			},
+			1.5: mini{
+				Name: "ty",
+				Size: 8,
+			},
+		},
+	}
+
+	buf := &bytes.Buffer{}
+	enc := gob.NewEncoder(buf)
+	err := enc.Encode(thing)
+	if err != nil {
+		t.Fatal("shame", err)
+	}
+
+	spew.Dump(buf.Bytes())
+
+	d := New(buf)
+	good := d.Scan()
+	if !good {
+		t.Error("got a decode error:", d.Err())
+		return
+	}
+
+	println(d.String())
+}
+
+func TestRootObjMap(t *testing.T) {
+	m := map[int]string{
+		25: "zero",
+		1:  "wun",
+		2:  "too",
+		33: "flirty flee",
+	}
+	buf := &bytes.Buffer{}
+	enc := gob.NewEncoder(buf)
+	err := enc.Encode(m)
+	if err != nil {
+		t.Fatal("shame", err)
+	}
+
+	d := New(buf)
+	good := d.Scan()
+	if !good {
+		t.Error("got a decode error:", d.Err())
+		return
+	}
+
+	d.WriteTypes(os.Stdout)
+
+	println(d.String())
+
+	rm := d.Obj().(map[string]interface{})
+	for k, v := range m {
+		ks := strconv.Itoa(k)
+		if rm[ks].(string) != v {
+			t.Errorf("%s was wrong, expected %s got %d", ks, v, rm[ks])
+		}
+	}
+}
+
+func TestRootObjPrimitive(t *testing.T) {
+
+	fixs := []struct {
+		val   interface{}
+		check func(interface{})
+	}{
+		{
+			val: 238,
+			check: func(out interface{}) {
+				if out.(int64) != int64(238) {
+					t.Error("did not decode a correct int")
+				}
+			},
+		},
+		{
+			val: "hello weld",
+			check: func(out interface{}) {
+				if out.(string) != "hello weld" {
+					t.Error("did not decode a correct string")
+				}
+			},
+		},
+		{
+			val: []int{9, 7, 5},
+			check: func(out interface{}) {
+				o := out.([]interface{})
+				exp := []int64{9, 7, 5}
+				for i, no := range o {
+					if no.(int64) != exp[i] {
+						t.Error("got bad array element")
+					}
+				}
+			},
+		},
+	}
+
+	for _, fx := range fixs {
+		// gob encode it
+		buf := &bytes.Buffer{}
+		enc := gob.NewEncoder(buf)
+		err := enc.Encode(fx.val)
+		if err != nil {
+			t.Fatal("shame", err)
+		}
+
+		// decode it
+		d := New(buf)
+		good := d.Scan()
+		if !good {
+			t.Error("got a decode error:", d.Err())
+			return
+		}
+
+		// confirm
+		fx.check(d.Obj())
 	}
 }
 

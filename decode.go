@@ -42,12 +42,6 @@ func (d *decoder) Scan() bool {
 		if d.lastErr != nil {
 			return false
 		}
-
-		// for k, v := range d.types {
-		// 	println(">>>", k)
-		// 	v.DumpType(os.Stdout)
-		// }
-
 		// d.b will be set up for the first data
 	} else {
 		// the second data needs us to set up d.b
@@ -85,6 +79,20 @@ func (d *decoder) String() string {
 	}
 	d.lastVal.dump(&buf)
 	return buf.String()
+}
+
+// Obj returns a limited object where any map keys are
+// represented as strings, making the object json compatible.
+func (d *decoder) Obj() interface{} {
+	return d.lastVal.obj()
+}
+
+func (d *decoder) WriteTypes(w io.Writer) {
+	for k, v := range d.types {
+		if k > minUserType {
+			v.dump(w)
+		}
+	}
 }
 
 func (d *decoder) setupTypes() error {
@@ -132,7 +140,6 @@ func (d *decoder) decodeTypes() error {
 
 // decodeTypes loads in the wireTypes from the gob types section
 func (d *decoder) decodeData() error {
-
 	// if we have used up all the bytes then there is no more data
 	if len(d.b) == 0 {
 		return nil
@@ -140,20 +147,39 @@ func (d *decoder) decodeData() error {
 	// decode the length - though we don't actually use it
 	_, err := d.decodeUint()
 	if err != nil {
-		return err
+		return err // TODO - richer nested errors
 	}
 	// get the type ID
 	typ, err := d.decodeInt()
 	if err != nil {
 		return err
 	}
+
+	var data val
 	tid := typeID(typ)
-	typeDesc, ok := d.types[tid]
-	if !ok {
-		return fmt.Errorf("got type index entry %d that does not exist", tid)
+	// top level primitive types
+	if tid < minUserType {
+		data = val{
+			t: tid,
+		}
+	} else {
+		typeDesc, ok := d.types[tid]
+		if !ok {
+			return fmt.Errorf("got type index entry %d that does not exist", tid)
+		}
+		// get the initial type
+		data = d.fromWireType(typeDesc)
 	}
 
-	data := d.fromWireType(typeDesc)
+	// is it a top level type that has a field delta of 0
+	if data.t != tStruct {
+		//then read in the zero delta (wonder why this exists?)
+		_, err = d.decodeUint()
+		if err != nil {
+			return err
+		}
+	}
+
 	data, err = d.start(data)
 	if err != nil {
 		return err
@@ -192,11 +218,13 @@ func (d *decoder) decode(x *val) error {
 		}
 		x.nu = iv
 		return nil
-	case tString:
-		return d.decodeString(x)
+	case tBytes, tString:
+		return d.decodeBytes(x)
 	case tSlice:
 		err := d.decodeSlice(x)
 		return err
+	case tMap:
+		return d.decodeMap(x)
 	case tStruct:
 		return d.decodeStruct(x)
 	}
@@ -205,10 +233,51 @@ func (d *decoder) decode(x *val) error {
 	if !ok {
 		return fmt.Errorf("%q found type id that is not in index: %d", d.paths(), x.t)
 	}
-	// and now set it to the content
-	x.copy(t)
+	// the wiretypes are already expanded
+	if x.t < minUserType {
+		x.copy(t)
+	} else {
+		// for other dynamic types
+		dt := d.fromWireType(t)
+		x.copy(dt)
+	}
 	// and decode it
 	return d.decode(x)
+}
+
+func (d *decoder) decodeMap(v *val) error {
+	d.path = append(d.path, "")
+	d.level++
+	defer func() {
+		d.level--
+		d.path = d.path[:len(d.path)-1]
+	}()
+
+	// get element count
+	ui, err := d.decodeUint()
+	if err != nil {
+		return err
+	}
+	v.ma.els = map[string]val{}
+	for i := 0; i < int(ui); i++ {
+		k := val{
+			t: v.ma.kt,
+		}
+		err := d.decode(&k)
+		if err != nil {
+			return err
+		}
+		nv := val{
+			t: v.ma.vt,
+		}
+		err = d.decode(&nv)
+		if err != nil {
+			return err
+		}
+		v.ma.els[k.string()] = nv
+	}
+
+	return nil
 }
 
 func (d *decoder) decodeStruct(x *val) error {
@@ -242,12 +311,13 @@ func (d *decoder) decodeStruct(x *val) error {
 	}
 }
 
-func (d *decoder) decodeString(v *val) error {
+func (d *decoder) decodeBytes(v *val) error {
 	len, err := d.decodeUint()
 	if err != nil {
 		return err
 	}
-	v.da = d.b[:len]
+	v.da = make([]byte, len)
+	copy(v.da, d.b[:len])
 	d.b = d.b[len:]
 	return nil
 }

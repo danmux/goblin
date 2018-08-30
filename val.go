@@ -10,20 +10,54 @@ import (
 
 const (
 	// the primitives
-	tBool      typeID = 1  //
-	tInt       typeID = 2  //
-	tUint      typeID = 3  //
-	tFloat     typeID = 4  // TODO
-	tBytes     typeID = 5  // TODO
-	tString    typeID = 6  //
-	tComplex   typeID = 7  // TODO
-	tInterface typeID = 8  // TODO
-	tSlice     typeID = 9  //
-	tMap       typeID = 10 // TODO
-	tStruct    typeID = 11 //
+	tBool      typeID = 1
+	tInt       typeID = 2
+	tUint      typeID = 3
+	tFloat     typeID = 4
+	tBytes     typeID = 5
+	tString    typeID = 6
+	tComplex   typeID = 7 // TODO
+	tInterface typeID = 8 // TODO
+	tSlice     typeID = 9
+	tMap       typeID = 10
+	tStruct    typeID = 11
 )
 
 type typeID int
+
+type mapv struct {
+	kt  typeID // key type id
+	vt  typeID // value type id
+	els map[string]val
+}
+
+func (m mapv) dumpi(w io.Writer, indent int) {
+	fmt.Fprintf(w, "%s{\n", pad(indent))
+	indent += 2
+	for k, v := range m.els {
+		fmt.Fprintf(w, "%s%s: \t(%s)\n", pad(indent), k, m.kt)
+		v.dumpi(w, indent+2)
+	}
+	fmt.Fprintf(w, "%s}\n", pad(indent))
+}
+
+func (m *mapv) copy(om mapv) {
+	m.kt = om.kt
+	m.vt = om.vt
+	for k, v := range om.els {
+		nv := val{}
+		nv.copy(v)
+		m.els[k] = nv
+	}
+}
+
+func (m mapv) obj() interface{} {
+	ma := map[string]interface{}{}
+	for k, v := range m.els {
+		ma[k] = v.obj()
+	}
+	return ma
+}
 
 // the slice value
 type slice struct {
@@ -37,6 +71,14 @@ func (s slice) dumpi(w io.Writer, indent int) {
 		v.dumpi(w, indent+2)
 	}
 	fmt.Fprintf(w, "%s]\n", pad(indent))
+}
+
+func (s slice) obj() interface{} {
+	var ar []interface{}
+	for _, v := range s.els {
+		ar = append(ar, v.obj())
+	}
+	return ar
 }
 
 func (s *slice) copy(os slice) {
@@ -54,6 +96,35 @@ type field struct {
 	nonZero bool
 	name    string
 	v       val
+}
+
+// tructs are slices of fields
+type structv []field
+
+func (s structv) dumpi(w io.Writer, indent int) {
+	fmt.Fprintf(w, "%s{\n", pad(indent))
+	for _, f := range s {
+		f.dumpi(w, indent+2)
+	}
+	fmt.Fprintf(w, "%s}\n", pad(indent))
+}
+
+func (s structv) obj() interface{} {
+	ma := map[string]interface{}{}
+	for _, v := range s {
+		ma[v.name] = v.v.obj()
+	}
+	return ma
+}
+
+func (s *structv) copy(os structv) {
+	fls := make([]field, len(os))
+	for i, f := range os {
+		nf := field{}
+		nf.copy(f)
+		fls[i] = nf
+	}
+	*s = structv(fls)
 }
 
 func (f field) dumpi(w io.Writer, indent int) {
@@ -75,12 +146,12 @@ func (f *field) copy(of field) {
 
 // val represents values of any of the builtin type
 type val struct {
-	t  typeID         // what primitive type id
-	da []byte         // for strings and []byte
-	nu uint64         // for all int, uint, float
-	sl slice          // for slice type
-	ma map[string]val // for map type. N.B. only primitive types supported in the index for now, they will be converted to string
-	st []field        // for struct type
+	t  typeID  // what primitive type id
+	da []byte  // for strings and []byte
+	nu uint64  // for all int, uint, float
+	sl slice   // for slice type
+	ma mapv    // for map type. N.B. only primitive types supported in the index for now, they will be converted to string
+	st structv // for struct type
 }
 
 // ToUint returns the unsigned integer value of the val data
@@ -109,24 +180,44 @@ func (v val) ToBool() bool {
 	return v.da[0] == 1 // should always be a 1
 }
 
+func (v val) string() string {
+	iv := v.obj()
+	if v.t == tString {
+		return fmt.Sprintf("%q", iv)
+	}
+	return fmt.Sprintf("%v", iv)
+}
+
+func (v val) obj() interface{} {
+	switch v.t {
+	case tBool:
+		return v.ToBool()
+	case tInt:
+		return v.ToInt()
+	case tUint:
+		return v.ToUint()
+	case tBytes:
+		return v.da
+	case tFloat:
+		return v.ToFloat()
+	case tString:
+		return string(v.da)
+	case tSlice:
+		return v.sl.obj()
+	case tStruct:
+		return v.st.obj()
+	case tMap:
+		return v.ma.obj()
+	}
+	return nil
+}
+
 func (v *val) copy(t val) {
 	v.t = t.t
 	v.da = nil
-	v.ma = map[string]val{}
-	for k, v := range t.ma {
-		nv := val{}
-		nv.copy(v)
-		v.ma[k] = nv
-	}
-	v.sl = slice{}
+	v.ma.copy(t.ma)
 	v.sl.copy(t.sl)
-
-	v.st = make([]field, len(t.st))
-	for i, f := range t.st {
-		nf := field{}
-		nf.copy(f)
-		v.st[i] = nf
-	}
+	v.st.copy(t.st)
 }
 
 func (v val) dump(w io.Writer) {
@@ -139,40 +230,14 @@ func pad(i int) string {
 
 func (v val) dumpi(w io.Writer, indent int) {
 	switch v.t {
-	case tBool:
-		fmt.Fprintf(w, "%s%t \t(%s)\n", pad(indent), v.ToBool(), v.t)
-	case tInt:
-		fmt.Fprintf(w, "%s%d \t(%s)\n", pad(indent), v.ToInt(), v.t.String())
-	case tUint:
-		fmt.Fprintf(w, "%s%d \t(%s)\n", pad(indent), v.ToUint(), v.t.String())
-	case tString:
-		fmt.Fprintf(w, "%s%q \t(%s)\n", pad(indent), string(v.da), v.t.String())
-
 	case tSlice:
 		v.sl.dumpi(w, indent)
 	case tStruct:
-		fmt.Fprintf(w, "%s{\n", pad(indent))
-		for _, f := range v.st {
-			f.dumpi(w, indent+2)
-		}
-		fmt.Fprintf(w, "%s}\n", pad(indent))
+		v.st.dumpi(w, indent)
 	case tMap:
-		// TODO
+		v.ma.dumpi(w, indent)
 	default:
-		var iv interface{}
-		switch v.t {
-		case tBool:
-			iv = v.ToBool()
-		case tInt:
-			iv = v.ToInt()
-		case tUint:
-			iv = v.ToUint()
-		case tString:
-			iv = string(v.da)
-		case tFloat:
-			iv = v.ToFloat()
-		}
-		fmt.Fprintf(w, "%s%v \t(%s)\n", pad(indent), iv, v.t)
+		fmt.Fprintf(w, "%s%s \t(%s)\n", pad(indent), v.string(), v.t)
 	}
 }
 
@@ -192,6 +257,10 @@ func (d *decoder) fromWireType(v val) val {
 	}
 
 	switch name {
+	case "mapT":
+		dv.t = tMap
+		dv.ma.kt = typeID(v.st[1].v.ToInt())
+		dv.ma.vt = typeID(v.st[2].v.ToInt())
 	case "structT":
 		dv.t = tStruct
 		for _, f := range v.st[1].v.sl.els { // sl is a slice of field types
@@ -209,7 +278,6 @@ func (d *decoder) fromWireType(v val) val {
 		dv.sl.t = typeID(v.st[1].v.ToInt()) // second field is the 'elem' field
 	}
 
-	// types[-typeID(typ)] = nt
 	return dv
 }
 
