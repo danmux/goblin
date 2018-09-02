@@ -1,27 +1,38 @@
 package goblin
 
 import (
-	"fmt"
-	"io"
 	"math"
 	"math/bits"
-	"strings"
 )
 
 const (
 	// the primitives
-	tBool      typeID = 1
-	tInt       typeID = 2
-	tUint      typeID = 3
-	tFloat     typeID = 4
-	tBytes     typeID = 5
-	tString    typeID = 6
-	tComplex   typeID = 7 // TODO
-	tInterface typeID = 8 // TODO
-	tSlice     typeID = 9
-	tMap       typeID = 10
-	tStruct    typeID = 11
+	tBool   typeID = 1
+	tInt    typeID = 2
+	tUint   typeID = 3
+	tFloat  typeID = 4
+	tBytes  typeID = 5
+	tString typeID = 6
+	// tComplex   typeID = 7 // TODO
+	// tInterface typeID = 8 // TODO
+	tSlice  typeID = 9
+	tMap    typeID = 10
+	tStruct typeID = 11
 )
+
+var typeLookup = map[int]string{
+	1:  "bool",
+	2:  "int64",
+	3:  "uint64",
+	4:  "float64",
+	5:  "[]byte",
+	6:  "string",
+	7:  "",
+	8:  "",
+	9:  "slice",
+	10: "map",
+	11: "struct",
+}
 
 type typeID int
 
@@ -29,16 +40,6 @@ type mapv struct {
 	kt  typeID // key type id
 	vt  typeID // value type id
 	els map[string]val
-}
-
-func (m mapv) dumpi(w io.Writer, indent int) {
-	fmt.Fprintf(w, "%s{\n", pad(indent))
-	indent += 2
-	for k, v := range m.els {
-		fmt.Fprintf(w, "%s%s: \t(%s)\n", pad(indent), k, m.kt)
-		v.dumpi(w, indent+2)
-	}
-	fmt.Fprintf(w, "%s}\n", pad(indent))
 }
 
 func (m *mapv) copy(om mapv) {
@@ -63,14 +64,6 @@ func (m mapv) obj() interface{} {
 type slice struct {
 	t   typeID
 	els []val
-}
-
-func (s slice) dumpi(w io.Writer, indent int) {
-	fmt.Fprintf(w, "%s[\n", pad(indent))
-	for _, v := range s.els {
-		v.dumpi(w, indent+2)
-	}
-	fmt.Fprintf(w, "%s]\n", pad(indent))
 }
 
 func (s slice) obj() interface{} {
@@ -101,14 +94,6 @@ type field struct {
 // tructs are slices of fields
 type structv []field
 
-func (s structv) dumpi(w io.Writer, indent int) {
-	fmt.Fprintf(w, "%s{\n", pad(indent))
-	for _, f := range s {
-		f.dumpi(w, indent+2)
-	}
-	fmt.Fprintf(w, "%s}\n", pad(indent))
-}
-
 func (s structv) obj() interface{} {
 	ma := map[string]interface{}{}
 	for _, v := range s {
@@ -125,16 +110,6 @@ func (s *structv) copy(os structv) {
 		fls[i] = nf
 	}
 	*s = structv(fls)
-}
-
-func (f field) dumpi(w io.Writer, indent int) {
-	fmt.Fprintf(w, "%s%q:\n", pad(indent), f.name)
-	// all struct fields can be skipped and contain no data
-	if !f.nonZero {
-		fmt.Fprintf(w, "%s(nil)\n", pad(indent+2))
-		return
-	}
-	f.v.dumpi(w, indent+2)
 }
 
 func (f *field) copy(of field) {
@@ -180,14 +155,6 @@ func (v val) ToBool() bool {
 	return v.da[0] == 1 // should always be a 1
 }
 
-func (v val) string() string {
-	iv := v.obj()
-	if v.t == tString {
-		return fmt.Sprintf("%q", iv)
-	}
-	return fmt.Sprintf("%v", iv)
-}
-
 func (v val) obj() interface{} {
 	switch v.t {
 	case tBool:
@@ -218,27 +185,6 @@ func (v *val) copy(t val) {
 	v.ma.copy(t.ma)
 	v.sl.copy(t.sl)
 	v.st.copy(t.st)
-}
-
-func (v val) dump(w io.Writer) {
-	v.dumpi(w, 0)
-}
-
-func pad(i int) string {
-	return strings.Repeat(" ", i)
-}
-
-func (v val) dumpi(w io.Writer, indent int) {
-	switch v.t {
-	case tSlice:
-		v.sl.dumpi(w, indent)
-	case tStruct:
-		v.st.dumpi(w, indent)
-	case tMap:
-		v.ma.dumpi(w, indent)
-	default:
-		fmt.Fprintf(w, "%s%s \t(%s)\n", pad(indent), v.string(), v.t)
-	}
 }
 
 // v must be a representation of a wire type
@@ -273,7 +219,7 @@ func (d *decoder) fromWireType(v val) val {
 			}
 			dv.st = append(dv.st, fld)
 		}
-	case "sliceT":
+	case "sliceT", "arrayT":
 		dv.t = tSlice
 		dv.sl.t = typeID(v.st[1].v.ToInt()) // second field is the 'elem' field
 	}

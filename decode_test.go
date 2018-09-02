@@ -3,11 +3,10 @@ package goblin
 import (
 	"bytes"
 	"encoding/gob"
-	"os"
+	"sort"
 	"strconv"
+	"strings"
 	"testing"
-
-	"github.com/davecgh/go-spew/spew"
 )
 
 func TestGoblin(t *testing.T) {
@@ -18,16 +17,19 @@ func TestGoblin(t *testing.T) {
 	type bart struct {
 		Name    string
 		Age     int
+		Pimples int64
 		Sane    bool
 		Lengths []int
 		Other   *other
 		Height  float64
 		Blob    []byte
+		Sizes   [3]int
 	}
 
 	thing := bart{
 		Name:    "goober",
 		Age:     19,
+		Pimples: 12345678,
 		Sane:    false,
 		Lengths: []int{8, 1001},
 		Other: &other{
@@ -35,6 +37,7 @@ func TestGoblin(t *testing.T) {
 		},
 		Height: 14.679,
 	}
+	thing.Sizes[1] = 25
 
 	buf := &bytes.Buffer{}
 	enc := gob.NewEncoder(buf)
@@ -55,32 +58,161 @@ func TestGoblin(t *testing.T) {
 		t.Fatal("shame", err)
 	}
 
-	spew.Dump(buf.Bytes())
-
+	// make the new decoder
 	d := New(buf)
+
+	// scan back the first one
 	good := d.Scan()
 	if !good {
 		t.Error("got a decode error:", d.Err())
 		return
 	}
-	println(d.String())
 
+	// dump the types out and compare to expected
+	buf = &bytes.Buffer{}
+	d.WriteTypes(buf)
+	if !sameLines(buf.String(), expectedTypes) {
+		t.Error("not expected types")
+	}
+
+	// get the json of the first object
+	b, err := d.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Equal(b, expected1) {
+		t.Error("not expected")
+	}
+
+	// scan the second object
 	good = d.Scan()
 	if !good {
 		t.Error("got a decode error:", d.Err())
 	}
-	println(d.String())
+
+	// get the json of the second object
+	b, err = d.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// check it is as expected
+	if !bytes.Equal(b, expected2) {
+		t.Error("not expected")
+	}
 
 	good = d.Scan()
 	if good {
 		t.Error("should have finished", d.Err())
 	}
-	if d.String() != "" {
-		t.Error("should not have got a string", d.String())
-	}
 	if d.Err() != nil {
 		t.Error("should not have got an error, but got:", d.Err())
 	}
+	o := d.Obj()
+	if o != nil {
+		t.Error("should not have got an obj if no current obj")
+	}
+	_, err = d.JSON()
+	if err == nil {
+		t.Error("should have got an error getting json if no current obj")
+	}
+}
+
+var expected1 = []byte(`{
+  "Age": 19,
+  "Blob": null,
+  "Height": 14.679,
+  "Lengths": [
+    8,
+    1001
+  ],
+  "Name": "goober",
+  "Other": {
+    "Colour": 12345678
+  },
+  "Pimples": 12345678,
+  "Sane": false,
+  "Sizes": [
+    0,
+    25,
+    0
+  ]
+}`)
+
+var expected2 = []byte(`{
+  "Age": 49,
+  "Blob": "CQgHVQ==",
+  "Height": 0,
+  "Lengths": [
+    0,
+    -11155
+  ],
+  "Name": "gopher",
+  "Other": {
+    "Colour": 0
+  },
+  "Pimples": 0,
+  "Sane": true,
+  "Sizes": [
+    0,
+    0,
+    0
+  ]
+}`)
+
+var expectedTypes = `
+type Type136 [3]int64	//[3]int
+
+type Type132 []int64	//[]int
+
+type other struct {
+  Colour uint64
+}
+
+type bart struct {
+  Name string
+  Age int64
+  Pimples int64
+  Sane bool
+  Lengths []int
+  Other other
+  Height float64
+  Blob []byte
+  Sizes [3]int
+}`
+
+// sameLines compares l and r line by line for matching sorted lines
+func sameLines(l, r string) bool {
+
+	ll := strings.Split(l, "\n")
+	sort.Slice(ll, func(i, j int) bool {
+		return ll[i] < ll[j]
+	})
+	ll = trimBlank(ll)
+	rl := strings.Split(r, "\n")
+	sort.Slice(rl, func(i, j int) bool {
+		return rl[i] < rl[j]
+	})
+	rl = trimBlank(rl)
+
+	for i, lin := range ll {
+		if lin != rl[i] {
+			return false
+		}
+	}
+	return true
+}
+func trimBlank(ls []string) []string {
+	i := 0
+	for _, l := range ls {
+		if l == "" {
+			continue
+		}
+		ls[i] = l
+		i++
+	}
+	return ls[:i]
 }
 
 func TestGoblinMap(t *testing.T) {
@@ -121,8 +253,6 @@ func TestGoblinMap(t *testing.T) {
 		t.Fatal("shame", err)
 	}
 
-	spew.Dump(buf.Bytes())
-
 	d := New(buf)
 	good := d.Scan()
 	if !good {
@@ -130,8 +260,37 @@ func TestGoblinMap(t *testing.T) {
 		return
 	}
 
-	println(d.String())
+	b, err := d.JSON()
+	if err != nil {
+		t.Error("could not get json string", err)
+	}
+
+	if string(b) != expMaps {
+		t.Error("did not get the expected maps")
+		t.Log(string(b))
+	}
+
 }
+
+var expMaps = `{
+  "IntThing": {
+    "1": 2.3,
+    "4": 0.00005
+  },
+  "StructThing": {
+    "1.5": {
+      "Name": "ty",
+      "Size": 8
+    },
+    "12.5": {
+      "Name": "jon",
+      "Size": 4.5
+    }
+  },
+  "Thing": {
+    "hi": "ruth"
+  }
+}`
 
 func TestRootObjMap(t *testing.T) {
 	m := map[int]string{
@@ -154,9 +313,11 @@ func TestRootObjMap(t *testing.T) {
 		return
 	}
 
-	d.WriteTypes(os.Stdout)
-
-	println(d.String())
+	buf = &bytes.Buffer{}
+	d.WriteTypes(buf)
+	if buf.String() != "type Type148 map[int64]string\n\n" {
+		t.Errorf("not expected map types: %q", buf.String())
+	}
 
 	rm := d.Obj().(map[string]interface{})
 	for k, v := range m {
@@ -168,7 +329,6 @@ func TestRootObjMap(t *testing.T) {
 }
 
 func TestRootObjPrimitive(t *testing.T) {
-
 	fixs := []struct {
 		val   interface{}
 		check func(interface{})
@@ -194,6 +354,18 @@ func TestRootObjPrimitive(t *testing.T) {
 			check: func(out interface{}) {
 				o := out.([]interface{})
 				exp := []int64{9, 7, 5}
+				for i, no := range o {
+					if no.(int64) != exp[i] {
+						t.Error("got bad slice element")
+					}
+				}
+			},
+		},
+		{
+			val: [3]int{13, 2, 12},
+			check: func(out interface{}) {
+				o := out.([]interface{})
+				exp := []int64{13, 2, 12}
 				for i, no := range o {
 					if no.(int64) != exp[i] {
 						t.Error("got bad array element")

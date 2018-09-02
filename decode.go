@@ -1,7 +1,7 @@
 package goblin
 
 import (
-	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -31,8 +31,9 @@ func New(r io.Reader) *decoder {
 	return d
 }
 
-// Decode takes a byte slice of gob encoded data and
-// returns a slice
+// Scan decodes the next available value.
+// If this is the first call to Scan on a new decoder, then the gob type information
+// will be decoded.
 func (d *decoder) Scan() bool {
 	d.lastErr = nil
 	d.lastVal = nil
@@ -59,38 +60,35 @@ func (d *decoder) Scan() bool {
 	return d.lastErr == nil
 }
 
+// Err returns any errors from the last call to Scan
 func (d *decoder) Err() error {
 	return d.lastErr
 }
 
-func (d *decoder) Bytes() []byte {
-	buf := bytes.Buffer{}
-	if d.lastVal == nil || d.lastErr != nil {
-		return nil
-	}
-	d.lastVal.dump(&buf)
-	return buf.Bytes()
-}
-
-func (d *decoder) String() string {
-	buf := bytes.Buffer{}
-	if d.lastVal == nil || d.lastErr != nil {
-		return ""
-	}
-	d.lastVal.dump(&buf)
-	return buf.String()
-}
-
-// Obj returns a limited object where any map keys are
+// Obj returns the result of the last Scan as a limited object where any map keys are
 // represented as strings, making the object json compatible.
 func (d *decoder) Obj() interface{} {
+	if d.lastVal == nil {
+		return nil
+	}
 	return d.lastVal.obj()
 }
 
+// Json returns the result of a call to Obj marshalled as an indented JSON []byte
+func (d *decoder) JSON() ([]byte, error) {
+	if d.lastVal == nil {
+		return nil, errors.New("can not return json representation of none existant object")
+	}
+	return json.MarshalIndent(d.lastVal.obj(), "", "  ")
+}
+
+// WriteTypes dumps to the given writer the representation of the type information
+// in a golang struct compatible way
 func (d *decoder) WriteTypes(w io.Writer) {
 	for k, v := range d.types {
 		if k > minUserType {
-			v.dump(w)
+			d.toType(w, &v)
+			fmt.Fprintln(w)
 		}
 	}
 }
@@ -274,7 +272,8 @@ func (d *decoder) decodeMap(v *val) error {
 		if err != nil {
 			return err
 		}
-		v.ma.els[k.string()] = nv
+		// all keys take their standard string representation
+		v.ma.els[fmt.Sprintf("%v", k.obj())] = nv
 	}
 
 	return nil
